@@ -73,7 +73,24 @@ function rotatedirs
     touch "$basedir.0"
 }
 
-function remotesync
+function localSync
+{
+    local host=$1;    shift
+    local basedir=$1; shift
+    local end=$1;     shift
+
+    rotatedirs "$basedir/$host" "$end"
+
+    for dir in $@; do
+        verbose "Syncing $host:$dir"
+        std_debug rsync ${RSYNC_OPTIONS[@]} $host:$dir "$basedir/$host.0/"
+        rsync ${RSYNC_OPTIONS[@]} $dir "$basedir/$host.0/"
+    done
+
+    verbose "Done sync'ing $host"
+}
+
+function remoteSync
 {
     local host=$1;    shift
     local basedir=$1; shift
@@ -90,7 +107,20 @@ function remotesync
     verbose "Done sync'ing $host"
 }
 
-function copykconfig
+function copyLocalKconfig
+{
+    local host=$1; shift
+    local basedir=$1; shift
+
+    local target="$basedir/$host.0/usr/src/linux/"
+
+    mkdir -p "$target"
+
+    modprobe -q configs
+    gzip -dc /proc/config.gz > "$target/kernel-config"
+}
+
+function copyRemoteKconfig
 {
     local host=$1; shift
     local basedir=$1; shift
@@ -107,6 +137,7 @@ function helpmsg
     cat <<EOF
 
 $PROGNAME -h "hostname" dir1 ...
+$PROGNAME dir1 ...
 
 Try --man to see a complete manual
 
@@ -124,6 +155,7 @@ NAME
 SYNOPSIS
 
     $PROGNAME -h <hostname> dir1 ...
+    $PROGNAME dir1 ...
 
 DESCRIPTION
 
@@ -203,7 +235,15 @@ OPTIONS
         Print a help message
 
     -h "hostname", --host "hostname"
-        Required.  Configures the hostname to pull a snapshot from.
+        Configures the hostname to pull a snapshot from.  If omitted,
+	localhost is assumed.
+
+    --local
+        Make a snapshot of the local system.  The target directory
+        will be creating using the output from "hostname". If an
+	alternate name is desired, set it using "-h".
+
+        See --remote
 
     --man
         Print a comprehensive manual
@@ -214,6 +254,11 @@ OPTIONS
     -r, --rsync-opt
         Pass additional options to rsync.  May be specified multiple
         times
+
+    --remote
+        Make a snapshot of a remote system (default).
+
+        See "--local"
 
     -v, --verbose
         Enable verbose output
@@ -226,6 +271,7 @@ backupdir=$BACKUPDIR
 basedir=$BASEDIR
 days=$MAX_DAYS
 dirs=(${DEFAULT_DIRS[@]})
+remote=1
 
 while [ "$1" != "" ]; do
     case $1 in
@@ -252,6 +298,9 @@ while [ "$1" != "" ]; do
                            host=$1
                            shift
                            ;;
+        --local          ) shift
+                           remote=0
+			   ;;
         --man            ) shift
                            manpage
                            exit 0
@@ -264,6 +313,9 @@ while [ "$1" != "" ]; do
         -r | --rsync-opt ) shift
                            RSYNC_OPTIONS+=( $1 )
                            shift
+                           ;;
+        --remote         ) shift
+                           remote=1
                            ;;
         -v | --verbose   ) shift
                            VERBOSE=1
@@ -284,13 +336,19 @@ elif [[ ! $days =~ ^[0-9]+ ]]; then
 elif [ $days -lt 1 ]; then
     std_err "Invalid days, must be greater than zero (try --help)"
     exit 255
-elif [ "$host" == "" ]; then
-    std_err "Missing host (try --help)"
-    exit 255
 fi
 
-remotesync "$host" "$backupdir/$basedir" "$days" ${dirs[@]}
-copykconfig "$host" "$backupdir/$basedir"
+if [[ -z $host ]]; then
+    host=$(hostname)
+fi
+
+if [[ "$remote" == 1 ]]; then
+    remoteSync "$host" "$backupdir/$basedir" "$days" ${dirs[@]}
+    copyRemoteKconfig "$host" "$backupdir/$basedir"
+else
+    localSync "$host" "$backupdir/$basedir" "$days" ${dirs[@]}
+    copyLocalKconfig "$host" "$backupdir/$basedir"
+fi
 
 exit
 
